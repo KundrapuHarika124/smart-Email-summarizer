@@ -4,7 +4,7 @@ torch
 dateparser
 sentencepiece
 
-Pinned versions to ensure binary compatibility
+#Pinned versions to ensure binary compatibility
 numpy==1.26.4
 spacy==3.7.5
 thinc==8.2.4
