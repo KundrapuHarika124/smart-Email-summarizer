@@ -2,6 +2,7 @@ import imaplib
 import email
 from email.header import decode_header
 import logging
+import re
 
 # Configure logging for better debugging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -88,8 +89,32 @@ def fetch_email_content(mail, uid):
     """
     Fetches the full text content of a specific email by UID.
     'mail' is an active IMAP4_SSL connection object.
-    Returns the decoded plain text content of the email, or None.
+    Returns a dict with decoded text, raw body text, extracted links, and attachments, or None.
     """
+    def decode_payload(payload_bytes, charset=None):
+        if payload_bytes is None:
+            return ""
+        encodings_to_try = [charset, 'utf-8', 'latin-1']
+        for encoding in encodings_to_try:
+            if not encoding:
+                continue
+            try:
+                return payload_bytes.decode(encoding, errors='ignore')
+            except (LookupError, UnicodeDecodeError):
+                continue
+        return payload_bytes.decode('utf-8', errors='ignore')
+
+    def extract_links(raw_text):
+        pattern = re.compile(r'(?i)\b((?:https?://|www\.)[^\s<>"\'\])]+)')
+        seen = set()
+        unique_links = []
+        for match in pattern.findall(raw_text or ""):
+            normalized = match.rstrip('.,;:!?')
+            if normalized not in seen:
+                seen.add(normalized)
+                unique_links.append(normalized)
+        return unique_links
+
     try:
         status, msg_data = mail.fetch(uid, "(RFC822)")
         if status != 'OK':
@@ -100,29 +125,63 @@ def fetch_email_content(mail, uid):
         msg = email.message_from_bytes(raw_email)
 
         text_content = ""
+        raw_text_parts = []
+        extracted_links = []
+        attachments = []
+        seen_links = set()
         if msg.is_multipart():
             for part in msg.walk():
                 ctype = part.get_content_type()
-                cdispo = str(part.get('Content-Disposition'))
+                cdispo = str(part.get('Content-Disposition') or "").lower()
+                filename = part.get_filename()
+                payload_bytes = part.get_payload(decode=True)
 
-                # Look for plain text parts that are not attachments
-                if ctype == 'text/plain' and 'attachment' not in cdispo:
+                if filename or 'attachment' in cdispo:
+                    attachment_filename = filename or "attachment.bin"
+                    attachments.append({
+                        'filename': attachment_filename,
+                        'content': payload_bytes or b"",
+                        'content_type': ctype
+                    })
+
+                if ctype in ('text/plain', 'text/html') and payload_bytes is not None:
+                    decoded_part = decode_payload(payload_bytes, part.get_content_charset())
+                    raw_text_parts.append(decoded_part)
+                    for link in extract_links(decoded_part):
+                        if link not in seen_links:
+                            seen_links.add(link)
+                            extracted_links.append(link)
+
+                # Look for plain text parts that are not attachments/inline files
+                if ctype == 'text/plain' and 'attachment' not in cdispo and not filename and not text_content:
                     try:
-                        charset = part.get_content_charset()
-                        text_content = part.get_payload(decode=True).decode(charset or 'utf-8', errors='ignore')
-                        break # Take the first plain text part
+                        text_content = decode_payload(payload_bytes, part.get_content_charset())
                     except Exception as e:
                         logging.warning(f"Could not decode plain text part from UID {uid}: {e}")
         else:
-            # Not multipart, assume plain text
+            # Not multipart, decode for raw and links and use text/plain for NLP text
             try:
+                payload_bytes = msg.get_payload(decode=True)
                 charset = msg.get_content_charset()
-                text_content = msg.get_payload(decode=True).decode(charset or 'utf-8', errors='ignore')
+                decoded_content = decode_payload(payload_bytes, charset)
+                raw_text_parts.append(decoded_content)
+                extracted_links = extract_links(decoded_content)
+                if msg.get_content_type() == 'text/plain':
+                    text_content = decoded_content
             except Exception as e:
                 logging.warning(f"Could not decode single part text from UID {uid}: {e}")
 
-        logging.info(f"Successfully fetched content for UID {uid}. Content length: {len(text_content)} chars.")
-        return text_content
+        raw_content = "\n".join([part for part in raw_text_parts if part]).strip()
+        logging.info(
+            f"Successfully fetched content for UID {uid}. Content length: {len(text_content)} chars. "
+            f"Links: {len(extracted_links)}. Attachments: {len(attachments)}."
+        )
+        return {
+            'text': text_content,
+            'raw': raw_content,
+            'links': extracted_links,
+            'attachments': attachments
+        }
     except Exception as e:
         logging.error(f"An error occurred while fetching email content for UID {uid}: {e}")
         return None
