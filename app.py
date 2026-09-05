@@ -41,7 +41,7 @@ if 'recent_emails' not in st.session_state:
 if 'selected_email_uid' not in st.session_state:
     st.session_state['selected_email_uid'] = None
 if 'current_email_content' not in st.session_state:
-    st.session_state['current_email_content'] = ""
+    st.session_state['current_email_content'] = {'text': '', 'raw': '', 'links': [], 'attachments': []}
 
 # --- Step 1: Connect Your Email Account ---
 st.header("Step 1: Connect Your Email Account 🔗")
@@ -131,6 +131,7 @@ if st.session_state['imap_connection'] is not None and st.session_state['recent_
                     )
                     if st.session_state['current_email_content'] is None:
                         st.warning(f"Could not fetch content for UID: {st.session_state['selected_email_uid']}. It might be malformed or an issue with decoding.")
+                        st.session_state['current_email_content'] = {'text': '', 'raw': '', 'links': [], 'attachments': []}
                     # Clear previous NLP results when a new email is selected
                     st.session_state['summary'] = ""
                     st.session_state['key_points'] = []
@@ -142,11 +143,12 @@ if st.session_state['imap_connection'] is not None and st.session_state['recent_
 
     with col2:
         st.subheader("Email Digest")
-        if st.session_state['current_email_content']:
+        email_content = st.session_state['current_email_content']
+        if email_content and (email_content.get('text') or email_content.get('raw') or email_content.get('attachments')):
             # --- Perform NLP Analysis and Display Digest ---
             with st.spinner("Generating intelligent digest... This might take a moment (loading models if first time)."):
                 # Clean the raw email content first
-                cleaned_content = clean_email_text(st.session_state['current_email_content'])
+                cleaned_content = clean_email_text(email_content.get('text', ''))
 
                 # --- ADD THIS LINE HERE ---
                 st.text_area("DEBUG: Cleaned Email Content:", cleaned_content, height=200)
@@ -179,6 +181,31 @@ if st.session_state['imap_connection'] is not None and st.session_state['recent_
                 else:
                     st.info("No specific deadlines found.")
 
+                st.subheader("🔗 Links")
+                links = email_content.get('links', [])
+                if links:
+                    for link in links:
+                        url = link if link.lower().startswith(("http://", "https://")) else f"https://{link}"
+                        st.markdown(f"- [{link}]({url})")
+                else:
+                    st.info("No links found in the email body.")
+
+                st.subheader("📎 Attachments")
+                mime_attachments = email_content.get('attachments', [])
+                if mime_attachments:
+                    for index, attachment in enumerate(mime_attachments):
+                        filename = attachment.get('filename') or f"attachment_{index + 1}"
+                        st.write(f"- {filename}")
+                        st.download_button(
+                            label=f"Download {filename}",
+                            data=attachment.get('content', b''),
+                            file_name=filename,
+                            mime=attachment.get('content_type', 'application/octet-stream'),
+                            key=f"download_attachment_{index}_{filename}"
+                        )
+                else:
+                    st.info("No real MIME attachments found.")
+
                 if st.session_state['attachments']:
                     st.subheader("📎 Mentioned Attachments")
                     for filename, context in st.session_state['attachments']:
@@ -191,7 +218,7 @@ if st.session_state['imap_connection'] is not None and st.session_state['recent_
 
             # Optional: Display raw content for debugging (can be removed later)
             with st.expander("View Raw Email Content (for debugging)"):
-                 st.text_area("Raw Content:", st.session_state['current_email_content'], height=300)
+                 st.text_area("Raw Content:", email_content.get('raw', ''), height=300)
 
         else:
             st.info("Select an email from the left to generate its digest.")

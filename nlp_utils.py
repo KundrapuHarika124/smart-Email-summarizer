@@ -58,6 +58,7 @@ def clean_email_text(text):
     text = re.sub(r'Change to:.*?(\d+\s*mins|\d+\s*hours|Daily|Weekly)', '', text, flags=re.IGNORECASE | re.DOTALL) # Notification options like "Change to: 5 mins"
 
     # 3. Remove URLs (aggressive removal, including those in parentheses or just raw)
+    # NOTE: URL extraction is intentionally done earlier in fetch_email_content on raw data.
     # This regex attempts to catch various forms of URLs, including those wrapped in ( )
     # It also targets common link placeholders like [LINK] or simply .com/.org/ etc.
     text = re.sub(r'\s*\(?\s*(https?://[^\s]+|www\.[^\s]+|\b\w+\.(com|org|net|io|co|ai)\/\S*\b)\s*\)?\s*', ' ', text, flags=re.IGNORECASE)
